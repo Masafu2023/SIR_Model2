@@ -111,8 +111,8 @@ prior <- function(beta) {
   return(dbeta(beta, 2, 2, log = TRUE))
 }
 
-loglik_curr <- log_likelihood(params=c(beta = beta_chain[1]), observed_data = simulated_data, 
-                              initial_state = initial_state, times = times) + prior(beta_chain[1])
+# loglik_curr <- log_likelihood(params=c(beta = beta_chain[1]), observed_data = simulated_data, 
+#                               initial_state = initial_state, times = times) + prior(beta_chain[1]) # No need to have this. It is repeated inside the loop 
 
 for (chain in 1:n_chains) {
   
@@ -168,13 +168,21 @@ burnin = 1000
 mcmc_out <- as.mcmc(beta_chain[burnin:length(beta_chain)])
 
 # Convert to data frame for ggplot
-mcmc_df <- data.frame(Iteration = burnin:length(beta_chain), Beta = beta_chain[burnin:length(beta_chain)])
+#mcmc_df <- data.frame(Iteration = burnin:length(beta_chain), Beta = beta_chain[burnin:length(beta_chain)])
 
+mcmc_df <- beta_chains[burnin:nrow(beta_chains),] %>% data.frame() %>% mutate(Iteration=1:n())
+names(mcmc_df)[1:n_chains]<-paste0("Chain ",1:n_chains)
+long_mcmc_df <- mcmc_df %>% pivot_longer(names_to="Chain",values_to="Beta", cols = starts_with("Chain"))
 
 
 # Plot MCMC Trace for Beta
-ggplot(mcmc_df, aes(x = Iteration, y = Beta)) +
-  geom_line(color = "blue", linewidth = 1) +
+# ggplot(mcmc_df, aes(x = Iteration, y = Beta)) +
+#   geom_line(color = "blue", linewidth = 1) +
+#   labs(title = "MCMC Trace for Beta (Adaptive MCMC)", x = "Iteration", y = "Beta") +
+#   theme_minimal()
+
+ggplot(long_mcmc_df, aes(x = Iteration, y = Beta, col=Chain)) +
+  geom_line() +
   labs(title = "MCMC Trace for Beta (Adaptive MCMC)", x = "Iteration", y = "Beta") +
   theme_minimal()
 
