@@ -23,17 +23,17 @@ library(lattice)
 # SIR model function with age compartments
 ```{r}
 SIR_model_age <- function(time, state, parameters) {
-  # Children (age group 1)
+  # Children (age group 1; 0-17 years)
   S1 <- state[1]
   I1 <- state[2]
   R1 <- state[3]
   
-  # Adults (age group 2)
+  # Adults (age group 2; 18-59 years)
   S2 <- state[4]
   I2 <- state[5]
   R2 <- state[6]
   
-  # Elderly (age group 3)
+  # Elderly (age group 3; 60 - 99 years)
   S3 <- state[7]
   I3 <- state[8]
   R3 <- state[9]
@@ -43,36 +43,38 @@ SIR_model_age <- function(time, state, parameters) {
   N2 <- S2 + I2 + R2
   N3 <- S3 + I3 + R3
   
-  # Transmission rates (force of infection) for each age group
+  # Transmission rates (force of infection) for each age group & recovery rate
   beta1 <- parameters["beta1"]
   beta2 <- parameters["beta2"]
   beta3 <- parameters["beta3"]
   gamma <- parameters["gamma"]
   
-  # Including birth and death rates 
+  # Birth and death rates
   birth_rate <- parameters["birth_rate"]
   death_rate <- parameters["death_rate"]
   
-  #adding vaccine coverage & effectiveness
+  # Vaccine coverage and efficacy (all-or-nothing or leaky immunity)
   vax_coverage <- parameters["vax_coverage"]
   vax_efficacy <- parameters["vax_efficacy"]
   
-  # Equations for age group 1 (Children) + death, death rates & vaccines effcancy
-  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N1 - death_rate * S1
-  dI1 <- beta1 * S1 * I1 / N1 - gamma * I1 - death_rate * I1
-  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N1 - death_rate * R1
+  # Aging rate (children becoming adults, adults becoming elderly)
+  aging_rate1to2 <- parameters["aging_rate1to2"]
+  aging_rate2to3 <- parameters["aging_rate2to3"]
   
-  # Equations for age group 2 (Adults)+ death, death rates & vaccines effcancy
-  dS2 <- -beta2 * S2 * I2 / N2 + birth_rate * (1 - vax_coverage) * N2 - death_rate * S2
-  dI2 <- beta2 * S2 * I2 / N2 - gamma * I2 - death_rate * I2
-  dR2 <- gamma * I2 + birth_rate * vax_coverage * vax_efficacy * N2 - death_rate * R2
+  # Equations for age group 1 (Children)
+  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N1 - death_rate * S1 - aging_rate1to2 * S1
+  dI1 <- beta1 * S1 * I1 / N1 - gamma * I1 - death_rate * I1 - aging_rate1to2 * I1
+  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N1 - death_rate * R1 - aging_rate1to2 * R1
   
-
+  # Equations for age group 2 (Adults)
+  dS2 <- -beta2 * S2 * I2 / N2 + aging_rate1to2 * S1 - death_rate * S2 - aging_rate2to3 * S2
+  dI2 <- beta2 * S2 * I2 / N2 + aging_rate1to2 * I1 - gamma * I2 - death_rate * I2 - aging_rate2to3 * I2
+  dR2 <- gamma * I2 + aging_rate1to2 * R1 - death_rate * R2 - aging_rate2to3 * R2
   
-  # Equations for age group 3 (Elderly)+ death, death rates & vaccines effcancy
-  dS3 <- -beta3 * S3 * I3 / N3 + birth_rate * (1 - vax_coverage) * N3 - death_rate * S3
-  dI3 <- beta3 * S3 * I3 / N3 - gamma * I3 - death_rate * I3
-  dR3 <- gamma * I3 + birth_rate * vax_coverage * vax_efficacy * N3 - death_rate * R3
+  # Equations for age group 3 (Elderly)
+  dS3 <- -beta3 * S3 * I3 / N3 + aging_rate2to3 * S2 - death_rate * S3
+  dI3 <- beta3 * S3 * I3 / N3 + aging_rate2to3 * I2 - gamma * I3 - death_rate * I3
+  dR3 <- gamma * I3 + aging_rate2to3 * R2 - death_rate * R3
   
   # Returning the rates of change for all compartments
   list(c(dS1, dI1, dR1, dS2, dI2, dR2, dS3, dI3, dR3))
@@ -83,19 +85,24 @@ SIR_model_age <- function(time, state, parameters) {
 
 # Parameters
 ```{r}
+# Define parameters
 beta1 <- 0.4   # Transmission rate for children
 beta2 <- 0.3   # Transmission rate for adults
 beta3 <- 0.25  # Transmission rate for elderly
 gamma <- 0.1   # Recovery rate (same for all age groups)
-birth_rate <- 0.01  # Birth rate 
+birth_rate <- 0.01  # Birth rate for youngest group
 death_rate <- 0.01  # Death rate 
 vax_coverage <- 0.6  # 60% vaccination coverage at birth
-vax_efficacy <- 0.8  # 80% vaccine efficacy
+vax_efficacy <- 0.8  # 80% vaccine efficacy (all-or-nothing)
+aging_rate1to2 <- 0.02  # Aging rate from children to adults
+aging_rate2to3 <- 0.015 # Aging rate from adults to elderly
 
 # Parameters vector
 parameters <- c(beta1 = beta1, beta2 = beta2, beta3 = beta3, gamma = gamma, 
                 birth_rate = birth_rate, death_rate = death_rate, 
-                vax_coverage = vax_coverage, vax_efficacy = vax_efficacy)
+                vax_coverage = vax_coverage, vax_efficacy = vax_efficacy,
+                aging_rate1to2 = aging_rate1to2, aging_rate2to3 = aging_rate2to3)
+
 ```
 
 
@@ -108,38 +115,36 @@ initial_state <- c(S1 = 99, I1 = 1, R1 = 0,  # Children
 
 # Time sequence (one year with daily time steps)
 times <- seq(0, 365, by = 1)
+
 ```
 
 # Model simulation and plots
 ```{r}
-# Simulation of the SIR model with age structure
-parameters <- c(beta1 = beta1, beta2 = beta2, beta3 = beta3, gamma = gamma,birth_rate = birth_rate, death_rate = death_rate, vax_coverage = vax_coverage, vax_efficacy = vax_efficacy)
+# Simulating the SIR model with age structure
 simulated_data <- ode(y = initial_state, times = times, func = SIR_model_age, parms = parameters) %>% data.frame()
 
-# Ensuring that the observed data columns are numeric
+# observed data columns as numeric
 simulated_data[, 2:10] <- lapply(simulated_data[, 2:10], as.numeric)
 
-# Adding a Time column for plotting
+#  Time column for plotting
 simulated_data$Time <- times
 
 # Reshaping data to long format for plotting
 simulated_data_long <- simulated_data %>%
   pivot_longer(cols = -Time, names_to = "Compartment", values_to = "Count")
 
-simulated_data_long <- simulated_data_long %>% filter(!is.na(Count))
-
-
-
-# Plotting
+# Ploting the SIR simulation 
 ggplot(simulated_data_long, aes(x = Time, y = Count, color = Compartment)) +
   geom_line() +
-  labs(title = "SIR Model Simulation with Birth, death and vaccination", x = "Time (days)", y = "Count") +
+  labs(title = "SIR Model Simulation with Birth, Aging, Death, and Vaccination", 
+       x = "Time (days)", y = "Count") +
   scale_color_manual(values = c("blue", "green", "red",      # Children
                                 "blue4", "green4", "red4",  # Adults
                                 "blue2", "green2", "red2",  # Elderly
-                                "black")) +                  # Recovered (R1, R2, R3)
-  coord_cartesian(ylim = c(0, 100)) +  #  y-axis limits from 0 to 100
+                                "purple")) +  # Additional color to make it 10
+  coord_cartesian(ylim = c(0, 100)) +  # Set y-axis limits from 0 to 100
   theme_minimal()
+
 
 
 
@@ -156,20 +161,16 @@ In Bayesian statistics, likelihood combines with the prior distribution to updat
 
 ```{r}
 log_likelihood_age <- function(params, observed_data, initial_state, times) {
-  
   parameters <- c(params["beta1"], params["beta2"], params["beta3"], params["death_rate"], 
-                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"], gamma = 1/10) # fixing gamma
+                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"], gamma = 1/10) 
   
   out <- ode(y = initial_state, times = times, func = SIR_model_age, parms = parameters)
   
-  #  NaNs in the output
-  if (any(is.na(out))) {
-    print("Model output contains NaN values.")
-    return(-Inf)
+  if (any(params <= 0)) {
+        return(-Inf)  # Reject invalid parameters
   }
   
   model_data <- as.data.frame(out)
-  
   observed_data[, 2:10] <- lapply(observed_data[, 2:10], as.numeric)
   
   log_likelihood <- 0
@@ -177,9 +178,7 @@ log_likelihood_age <- function(params, observed_data, initial_state, times) {
     obs <- ceiling(observed_data[[col]])
     model <- model_data[[col]]
     
-    # Check for NaNs in observed and model data
     if (any(is.na(obs)) || any(is.na(model))) {
-      print("Observed or model data contains NaN values.")
       return(-Inf)
     }
     
@@ -188,6 +187,9 @@ log_likelihood_age <- function(params, observed_data, initial_state, times) {
   
   return(log_likelihood)
 }
+
+
+
 
 
 ```
@@ -199,13 +201,14 @@ Markov chain - is a sequence of random variables where each variable(or state) d
 Monte Carlo - Estimates distribution of interest.
 ($\text{P}(X_{t}+ _1| \text{X}_{t1}, X_{t2}....X_{t}_{t} = \text{P}(X_{t}+_1|X_{t}$)
 ```{r}
-
 n_iter <- 5000
 beta_init <- c(0.1, 0.15, 0.2)  # Initial beta values for MCMC
-n_chains <- 3
+n_chains <- 3 # Number of chains
 sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
 target_accept_rate <- 0.234  # Target acceptance rate for adaptive MCMC
 adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
+
+
 ```
 
 # Incorporating RHAT logic: storage for multiple chains& initializing the chain
@@ -221,17 +224,19 @@ beta_chains[1, ] <- beta_init
 
 # Prior distribution: Beta(2, 2)
 prior <- function(beta) {
-  return(dbeta(beta, 2, 2, log = TRUE))
+    if (beta <= 0 || beta >= 1) {
+        return(-Inf)  # Reject invalid beta
+    }
+    return(dbeta(beta, 2, 2, log = TRUE))  # Return log density
 }
 ```
 
 # MCMC loop for each chain
 ```{r}
+
 for (chain in 1:n_chains) {
   
   acceptance_counter <- 0  # Resetting acceptance counter for each chain
-  
-  # Initializing log likelihood for current chain with all parameters
   loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1, chain], 
                                                beta2 = beta_chains[1, chain], 
                                                beta3 = beta_chains[1, chain], 
@@ -241,21 +246,21 @@ for (chain in 1:n_chains) {
                                                vax_efficacy = beta_chains[1, chain]),
                                     observed_data = simulated_data,
                                     initial_state = initial_state,
-                                    times = times) +
-    prior(beta_chains[1, chain])
+                                    times = times) + prior(beta_chains[1, chain])
   
-  # Checking for NaN in the initial likelihood
   if (is.nan(loglik_curr)) {
+    loglik_curr <- -Inf
     print(paste("Warning: Initial log likelihood is NaN for chain", chain))
-    loglik_curr <- -Inf  # Penalize with -Inf to reject invalid initial proposals
   }
   
   for (i in 2:n_iter) {
-    # Proposing new beta from a normal distribution centered around the current value
     beta_proposed <- rnorm(1, mean = beta_chains[i - 1, chain], sd = sd_prop[chain])
     
-    if (beta_proposed > 0) {  # Ensuring beta is positive
-      # Propose all parameters like in the initialization
+    # Check for NA or invalid proposed beta
+    if (is.na(beta_proposed) || beta_proposed <= 0) {
+      loglik_prop <- -Inf  # Penalize invalid proposals
+      print(paste("Warning: Proposed beta is NA or non-positive at iteration", i, "in chain", chain))
+    } else {
       loglik_prop <- log_likelihood_age(params = c(beta1 = beta_proposed, 
                                                    beta2 = beta_proposed, 
                                                    beta3 = beta_proposed,
@@ -265,34 +270,36 @@ for (chain in 1:n_chains) {
                                                    vax_efficacy = beta_proposed),
                                         observed_data = simulated_data,
                                         initial_state = initial_state,
-                                        times = times) + 
-        prior(beta_proposed)
+                                        times = times) + prior(beta_proposed)
       
-      # Check for NaN in the proposed likelihood
       if (is.nan(loglik_prop)) {
-        print(paste("Warning: Proposed log likelihood is NaN at iteration", i, "in chain", chain))
-        loglik_prop <- -Inf  # Penalize with -Inf to reject invalid proposals
+        loglik_prop <- -Inf
+        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i, "in chain", chain))
       }
-    } else {
-      loglik_prop <- -1E6  # Penalizing invalid proposals (negative beta)
     }
     
-    # Calculating acceptance probability
-    acceptance_prob <- loglik_prop - loglik_curr
-    
-    # Check for NaN in the acceptance probability
-    if (is.nan(acceptance_prob)) {
-      print(paste("Warning: acceptance_prob is NaN at iteration", i, "in chain", chain))
-      acceptance_prob <- -Inf  # Automatically reject if acceptance_prob is NaN
+    # loglik_curr 
+    if (is.nan(loglik_curr)) {
+      loglik_curr <- -Inf
+      print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i, "in chain", chain))
     }
     
-    # Metropolis-Hastings acceptance step
-    if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
-      beta_chains[i, chain] <- beta_proposed
-      loglik_curr <- loglik_prop
-      acceptance_counter <- acceptance_counter + 1
-    } else {
-      beta_chains[i, chain] <- beta_chains[i - 1, chain]
+    # acceptance probability only if valid log likelihood values
+    if (!is.nan(loglik_curr) && !is.nan(loglik_prop)) {
+      acceptance_prob <- loglik_prop - loglik_curr
+      
+      if (is.nan(acceptance_prob)) {
+        print(paste("Warning: acceptance_prob is NaN at iteration", i, "in chain", chain))
+      } else {
+        # Metropolis-Hastings acceptance step
+        if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
+          beta_chains[i, chain] <- beta_proposed
+          loglik_curr <- loglik_prop
+          acceptance_counter <- acceptance_counter + 1
+        } else {
+          beta_chains[i, chain] <- beta_chains[i - 1, chain]
+        }
+      }
     }
     
     # Adaptive adjustment of proposal standard deviation (sd_prop)
@@ -300,11 +307,13 @@ for (chain in 1:n_chains) {
       acceptance_rate <- acceptance_counter / i
       sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
       
-     
+      # Ensuring sd_prop doesn't become negative or too small
+      if (sd_prop[chain] < 1e-6) {
+        sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerating proposals
+      }
     }
   }
 }
-
 
 
 ```
