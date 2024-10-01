@@ -278,13 +278,13 @@ for (chain in 1:n_chains) {
       }
     }
     
-    # loglik_curr 
+    #  loglik_curr 
     if (is.nan(loglik_curr)) {
       loglik_curr <- -Inf
       print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i, "in chain", chain))
     }
     
-    # acceptance probability only if valid log likelihood values
+    # Computing acceptance probability only if valid log likelihood values
     if (!is.nan(loglik_curr) && !is.nan(loglik_prop)) {
       acceptance_prob <- loglik_prop - loglik_curr
       
@@ -309,7 +309,7 @@ for (chain in 1:n_chains) {
       
       # Ensuring sd_prop doesn't become negative or too small
       if (sd_prop[chain] < 1e-6) {
-        sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerating proposals
+        sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
       }
     }
   }
