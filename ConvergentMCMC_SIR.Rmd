@@ -326,6 +326,9 @@ for (i in 2:n_iter) {
       scaling = exp(log(scaling) + (0.999)^(i)*(acceptance_counter/(i)-0.234))
       scaling = min(scaling, scaling_max)
     }
+    
+    if((i %% 10) == 0) print(round(c(i,acceptance_counter/i, loglik_curr, loglik_prop , scaling),2)) # print every 10 iterations
+
 
     # # Adaptive adjustment of proposal standard deviation (sd_prop)
     # if (i > 100) {  # Adapt every 100 iterations
