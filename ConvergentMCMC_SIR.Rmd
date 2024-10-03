@@ -262,9 +262,13 @@ loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1,1],
   colnames(covariance_curr) = names(p_curr)
   covariance = covariance_curr
   
+  scaling_max=10; scaling=1
+  d = length(p_curr)
+  
 for (i in 2:n_iter) {  
 
-    beta_proposed <- mvrnorm(1, mu = p_curr, Sigma = covariance)
+    beta_proposed <- 0.05*mvrnorm(1, mu = p_curr, Sigma = scaling*(2.38^2)/d*covariance_curr) + 
+                 (1-0.05)*mvrnorm(1, mu = p_curr, Sigma = scaling*(2.38^2)/d*covariance)
     
     # Check for NA or invalid proposed beta
     if (any(beta_proposed < 0.0)) {
@@ -315,6 +319,14 @@ for (i in 2:n_iter) {
       }
     }
     
+     
+    if(i>100){
+      covariance=cov(beta_chains[1:i,])
+      rownames(covariance)=names(p_curr); colnames(covariance)=names(p_curr)
+      scaling = exp(log(scaling) + (0.999)^(i)*(acceptance_counter/(i)-0.234))
+      scaling = min(scaling, scaling_max)
+    }
+
     # # Adaptive adjustment of proposal standard deviation (sd_prop)
     # if (i > 100) {  # Adapt every 100 iterations
     #   acceptance_rate <- acceptance_counter / i
