@@ -1,4 +1,4 @@
----
+  ---
 title: "ConvergentMCMC_SIR"
 author: "Brian Masafu"
 date: "2024-09-26"
@@ -16,6 +16,10 @@ library(tidyverse)
 library(coda)
 library(MCMCvis)
 library(lattice)
+library(MASS)
+library(ggplot2)
+library(reshape2)
+
 
 ```
 
@@ -43,6 +47,8 @@ SIR_model_age <- function(time, state, parameters) {
   N2 <- S2 + I2 + R2
   N3 <- S3 + I3 + R3
   
+  N = N1 + N2 + N3
+  
   # Transmission rates (force of infection) for each age group & recovery rate
   beta1 <- parameters["beta1"]
   beta2 <- parameters["beta2"]
@@ -62,9 +68,9 @@ SIR_model_age <- function(time, state, parameters) {
   aging_rate2to3 <- parameters["aging_rate2to3"]
   
   # Equations for age group 1 (Children)
-  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N1 - death_rate * S1 - aging_rate1to2 * S1
+  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N + birth_rate * vax_coverage *(1 - vax_efficacy) * N - death_rate * S1 - aging_rate1to2 * S1
   dI1 <- beta1 * S1 * I1 / N1 - gamma * I1 - death_rate * I1 - aging_rate1to2 * I1
-  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N1 - death_rate * R1 - aging_rate1to2 * R1
+  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N - death_rate * R1 - aging_rate1to2 * R1
   
   # Equations for age group 2 (Adults)
   dS2 <- -beta2 * S2 * I2 / N2 + aging_rate1to2 * S1 - death_rate * S2 - aging_rate2to3 * S2
@@ -94,8 +100,8 @@ birth_rate <- 0.01  # Birth rate for youngest group
 death_rate <- 0.01  # Death rate 
 vax_coverage <- 0.6  # 60% vaccination coverage at birth
 vax_efficacy <- 0.8  # 80% vaccine efficacy (all-or-nothing)
-aging_rate1to2 <- 0.02  # Aging rate from children to adults
-aging_rate2to3 <- 0.015 # Aging rate from adults to elderly
+aging_rate1to2 <- 1/(18*365)  # Aging rate from children to adults
+aging_rate2to3 <- 1/(42*365) # Aging rate from adults to elderly
 
 # Parameters vector
 parameters <- c(beta1 = beta1, beta2 = beta2, beta3 = beta3, gamma = gamma, 
@@ -114,7 +120,7 @@ initial_state <- c(S1 = 99, I1 = 1, R1 = 0,  # Children
                    S3 = 99, I3 = 1, R3 = 0)  # Elderly
 
 # Time sequence (one year with daily time steps)
-times <- seq(0, 1095, by = 1)
+times <- seq(0, 365, by = 1)
 
 ```
 
@@ -141,8 +147,8 @@ ggplot(simulated_data_long, aes(x = Time, y = Count, color = Compartment)) +
   scale_color_manual(values = c("blue", "green", "red",      # Children
                                 "blue4", "green4", "red4",  # Adults
                                 "blue2", "green2", "red2",  # Elderly
-                                "purple")) + 
-  coord_cartesian(ylim = c(0, 100)) +  
+                                "purple")) +  # Additional color to make it 10
+  coord_cartesian(ylim = c(0, 100)) +  # Set y-axis limits from 0 to 100
   theme_minimal()
 
 
@@ -162,7 +168,9 @@ In Bayesian statistics, likelihood combines with the prior distribution to updat
 ```{r}
 log_likelihood_age <- function(params, observed_data, initial_state, times) {
   parameters <- c(params["beta1"], params["beta2"], params["beta3"], params["death_rate"], 
-                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"],params["aging_rate1to2"],params["aging_rate2to3"], gamma = 1/10) 
+                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"],params["gamma"],
+                                               params["aging_rate1to2"],
+                                               params["aging_rate2to3"] ) 
   
   out <- ode(y = initial_state, times = times, func = SIR_model_age, parms = parameters)
   
@@ -178,15 +186,19 @@ log_likelihood_age <- function(params, observed_data, initial_state, times) {
     obs <- ceiling(observed_data[[col]])
     model <- model_data[[col]]
     
-    if (any(is.na(obs)) || any(is.na(model))) {
-      return(-Inf)
-    }
+    # if (any(is.na(obs)) || any(is.na(model))) {
+    #   return(-Inf)
+    # }
     
     log_likelihood <- log_likelihood + sum(dpois(obs, lambda = model, log = TRUE))
   }
   
   return(log_likelihood)
 }
+
+
+
+
 
 ```
 
@@ -197,23 +209,13 @@ Markov chain - is a sequence of random variables where each variable(or state) d
 Monte Carlo - Estimates distribution of interest.
 ($\text{P}(X_{t}+ _1| \text{X}_{t1}, X_{t2}....X_{t}_{t} = \text{P}(X_{t}+_1|X_{t}$)
 ```{r}
-n_iter <- 5000
-beta_init <- c(0.4, 0.3, 0.25)  # Initial beta values for MCMC
+n_iter <- 1000
+beta_init <- c(0.1, 0.15, 0.2, 0.2)  # Initial beta and va efficay values for MCMC
 n_chains <- 3 # Number of chains
-sd_prop <- rep(0.01, n_chains)  # Initial SD for each chain
+#sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
 target_accept_rate <- 0.234  # Target acceptance rate for adaptive MCMC
-adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
-initial_params_list <- replicate(n_chains, c(
-  beta1 = beta_init[1],             # Transmission rate for children
-  beta2 = beta_init[2],             # Transmission rate for adults
-  beta3 = beta_init[3],             # Transmission rate for elderly
-  death_rate = 0.01,                 # Death rate
-  birth_rate = 0.01,                 # Birth rate
-  vax_efficacy = 0.8,                # Vaccine efficacy
-  vax_coverage = 0.6,                # Vaccination coverage
-  aging_rate1to2 = 0.02,             # Aging rate from children to adults
-  aging_rate2to3 = 0.015             # Aging rate from adults to elderly
-), simplify = FALSE)
+#adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
+
 
 ```
 
@@ -223,76 +225,84 @@ Rhat(potential scale reduction factor) - Measures whether or not an MCMC algorit
 
 ```{r}
 # Incorporating RHAT logic: storage for multiple chains
-beta_chains <- matrix(NA, ncol = n_chains, nrow = n_iter)
+beta_chains <- matrix(NA, ncol = 4 , nrow = n_iter)
 
 # Initializing chains with different initial values
 beta_chains[1, ] <- beta_init
 
 # Prior distribution: Beta(2, 2)
-prior <- function(beta) {
-    if (beta <= 0 || beta >= 1) {
-        return(-Inf)  # Reject invalid beta
-    }
-    return(dbeta(beta, 2, 2, log = TRUE))  # Return log density
+prior <- function(pr) {
+   rt <- dbeta(pr[1], 2, 2, log = TRUE) +
+           dbeta(pr[2], 2, 2, log = TRUE) +
+           dbeta(pr[3], 2, 2, log = TRUE) +
+           dunif(pr[4], 0, 1, log = TRUE)
+   rt <- as.numeric(rt) # remove the names
+   return(rt)  # Return log density
 }
 ```
-
-
 
 # MCMC loop for each chain
 ```{r}
 
-for (chain in 1:n_chains) {
-
-  acceptance_counter <- 0  # Resetting acceptance counter for each chain
-  loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1, chain], 
-                                               beta2 = beta_chains[1, chain], 
-                                               beta3 = beta_chains[1, chain], 
-                                               birth_rate = beta_chains[1, chain], 
-                                               death_rate = beta_chains[1, chain], 
-                                               vax_coverage = beta_chains[1, chain], 
-                                               vax_efficacy = beta_chains[1, chain]),
+acceptance_counter <- 0  # Resetting acceptance counter for each chain
+loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1,1], 
+                                               beta2 = beta_chains[1,2], 
+                                               beta3 = beta_chains[1,3], 
+                                               birth_rate = birth_rate, 
+                                               death_rate = death_rate, 
+                                               vax_coverage = vax_coverage, 
+                                               vax_efficacy = beta_chains[1, 4],
+                                               gamma=gamma,
+                                               aging_rate1to2=aging_rate1to2,
+                                               aging_rate2to3=aging_rate2to3),
                                     observed_data = simulated_data,
                                     initial_state = initial_state,
-                                    times = times) + prior(beta_chains[1, chain])
+                                    times = times) + prior(beta_chains[1,])
   
-  if (is.nan(loglik_curr)) {
-    loglik_curr <- -Inf
-    print(paste("Warning: Initial log likelihood is NaN for chain", chain, "with beta =", beta_chains[1, chain]))
-  }
+  p_curr = beta_chains[1,]
+  names(p_curr) <- c("beta1","beta2","beta3","vax_efficacy")
+  covariance_curr <- diag(p_curr/10000)
+  rownames(covariance_curr) = names(p_curr)
+  colnames(covariance_curr) = names(p_curr)
+  covariance = covariance_curr
   
-  for (i in 2:n_iter) {
-    beta_proposed <- rnorm(1, mean = beta_chains[i - 1, chain], sd = sd_prop[chain])
+  scaling_max=10; scaling=1
+  d = length(p_curr)
+  
+for (i in 2:n_iter) {  
 
+    beta_proposed <- 0.05*mvrnorm(1, mu = p_curr, Sigma = scaling*(2.38^2)/d*covariance_curr) + 
+                 (1-0.05)*mvrnorm(1, mu = p_curr, Sigma = scaling*(2.38^2)/d*covariance)
     
-    print(paste("Iteration", i, "Chain", chain, "Proposed beta =", beta_proposed, "sd =", sd_prop[chain]))
-    
-    # Checking for NA or invalid proposed beta
-    if (is.na(beta_proposed) || beta_proposed <= 0 || is.nan(beta_proposed)) {
+    # Check for NA or invalid proposed beta
+    if (any(beta_proposed < 0.0)) {
       loglik_prop <- -Inf  # Penalize invalid proposals
-      print(paste("Warning: Proposed beta is NA, NaN, or non-positive at iteration", i, "in chain", chain, "with beta =", beta_proposed))
+      print(paste("Warning: Proposed beta is NA or non-positive at iteration", i))
     } else {
-      loglik_prop <- log_likelihood_age(params = c(beta1 = beta_proposed, 
-                                                   beta2 = beta_proposed, 
-                                                   beta3 = beta_proposed,
-                                                   birth_rate = beta_proposed, 
-                                                   death_rate = beta_proposed, 
-                                                   vax_coverage = beta_proposed, 
-                                                   vax_efficacy = beta_proposed),
+      loglik_prop <- log_likelihood_age(params = c(beta_proposed["beta1"], 
+                                                   beta_proposed["beta2"], 
+                                                   beta_proposed["beta3"],
+                                                   birth_rate = birth_rate, 
+                                                   death_rate = death_rate, 
+                                                   vax_coverage = vax_coverage, 
+                                                   beta_proposed["vax_efficacy"],
+                                                   gamma=gamma,
+                                                   aging_rate1to2=aging_rate1to2,
+                                                   aging_rate2to3=aging_rate2to3),
                                         observed_data = simulated_data,
                                         initial_state = initial_state,
                                         times = times) + prior(beta_proposed)
       
       if (is.nan(loglik_prop)) {
         loglik_prop <- -Inf
-        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i, "in chain", chain, "with beta =", beta_proposed))
+        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i))
       }
     }
     
     #  loglik_curr 
     if (is.nan(loglik_curr)) {
       loglik_curr <- -Inf
-      print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i, "in chain", chain))
+      print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i))
     }
     
     # Computing acceptance probability only if valid log likelihood values
@@ -300,54 +310,100 @@ for (chain in 1:n_chains) {
       acceptance_prob <- loglik_prop - loglik_curr
       
       if (is.nan(acceptance_prob)) {
-        print(paste("Warning: acceptance_prob is NaN at iteration", i, "in chain", chain))
+        print(paste("Warning: acceptance_prob is NaN at iteration", i))
       } else {
         # Metropolis-Hastings acceptance step
         if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
-          beta_chains[i, chain] <- beta_proposed
+          beta_chains[i,] <- beta_proposed
           loglik_curr <- loglik_prop
+          p_curr <- beta_proposed
           acceptance_counter <- acceptance_counter + 1
         } else {
-          beta_chains[i, chain] <- beta_chains[i - 1, chain]
+          beta_chains[i,] <- beta_chains[i - 1,]
         }
       }
     }
     
-    # Adaptive adjustment of proposal standard deviation (sd_prop)
-    if (i > 100) {  # Adapt every 100 iterations
-      acceptance_rate <- acceptance_counter / i
-      sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
-      
-      # Ensuring sd_prop doesn't become negative or too small
-      if (sd_prop[chain] < 1e-6 || is.nan(sd_prop[chain])) {
-        sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
-        print(paste("Warning: sd_prop became too small or NaN and was reset to minimum value at iteration", i, "in chain", chain))
-      }
+     
+    if(i>100){
+      covariance=cov(beta_chains[1:i,])
+      rownames(covariance)=names(p_curr); colnames(covariance)=names(p_curr)
+      scaling = exp(log(scaling) + (0.9999)^(i)*(acceptance_counter/(i)-0.234))
+      scaling = min(scaling, scaling_max)
     }
-  }
-}
+    
+    if((i %% 10) == 0) print(round(c(i,acceptance_counter/i, loglik_curr, loglik_prop , scaling),2)) # print every 10 iterations
 
+
+    # # Adaptive adjustment of proposal standard deviation (sd_prop)
+    # if (i > 100) {  # Adapt every 100 iterations
+    #   acceptance_rate <- acceptance_counter / i
+    #   sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
+    #   
+    #   # Ensuring sd_prop doesn't become negative or too small
+    #   if (sd_prop[chain] < 1e-6) {
+    #     sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
+    #   }
+    # }
+  }
 
 ```
 
+#plot parallel lines for 4 varinaces
+```{r}
+
+# Create a data frame from the MCMC chains
+mcmc_data <- data.frame(
+  Iteration = burnin:n_iter,
+  beta1 = beta1[burnin:n_iter],
+  beta2 = beta2[burnin:n_iter],
+  beta3 = beta3[burnin:n_iter],
+  vax_efficacy = vax_efficacy[burnin:n_iter]
+)
+
+# Reshape data to long format for ggplot2
+mcmc_data_long <- melt(mcmc_data, id.vars = "Iteration", 
+                       variable.name = "Parameter", 
+                       value.name = "Value")
+
+# Plot all parameters as lines
+ggplot(mcmc_data_long, aes(x = Iteration, y = Value, color = Parameter)) +
+  geom_line() +
+  labs(title = "MCMC Chains for Beta1, Beta2, Beta3, and Vax Efficacy", 
+       x = "Iteration", y = "Parameter Value") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+
+
+```
 
 #converting beta chains
 
 ```{r}
 burnin <- 1000
+beta1 <- beta_chains[, 1]
+beta2 <- beta_chains[, 2]
+beta3 <- beta_chains[, 3]
+vax_efficacy <- beta_chains[, 4]
+
+n_iter <- nrow(beta_chains)
+
 mcmc_out <- mcmc.list(
-  as.mcmc(beta_chains[burnin:n_iter, 1, drop = FALSE]),
-  as.mcmc(beta_chains[burnin:n_iter, 2, drop = FALSE]),
-  as.mcmc(beta_chains[burnin:n_iter, 3, drop = FALSE])
+  as.mcmc(beta1[(burnin + 1):n_iter, drop = FALSE]),
+  as.mcmc(beta2[(burnin + 1):n_iter, drop = FALSE]),
+  as.mcmc(beta3[(burnin + 1):n_iter, drop = FALSE]),
+  as.mcmc(vax_efficacy[(burnin + 1):n_iter, drop = FALSE])
 )
 
 # Converting beta_chains matrix into mcmc objects 
 mcmc_chain1 <- as.mcmc(beta_chains[, 1])
 mcmc_chain2 <- as.mcmc(beta_chains[, 2])
 mcmc_chain3 <- as.mcmc(beta_chains[, 3])
+mcmc_chain4 <- as.mcmc(beta_chains[, 4])
 
 # Combining all chains into an mcmc.list object
-mcmc_combined <- mcmc.list(mcmc_chain1, mcmc_chain2, mcmc_chain3)
+mcmc_combined <- mcmc.list(mcmc_chain1, mcmc_chain2, mcmc_chain3, mcmc_chain4)
 
 # Calculating R-hat using rs tan's summary function
 rhat_values <- rstan::Rhat(as.matrix(mcmc_combined))
@@ -434,30 +490,41 @@ Availability of windows fractions despite no Z - values ,suggest that the model 
 
 #plots for trace mcmc
 ```{r}
-
-#  trace plot using coda's plot function
-plot(mcmc_combined, trace = TRUE, density = FALSE, main = "Trace Plots for MCMC Chains")
-
-# Assigning column names to the beta_chains matrix 
-colnames(beta_chains) <- c("Beta1", "Beta2", "Beta3")
-
-# Converting each chain to mcmc objects again
-mcmc_chain1 <- as.mcmc(matrix(beta_chains[, "Beta1"], ncol = 1, dimnames = list(NULL, "Beta")))
-mcmc_chain2 <- as.mcmc(matrix(beta_chains[, "Beta2"], ncol = 1, dimnames = list(NULL, "Beta")))
-mcmc_chain3 <- as.mcmc(matrix(beta_chains[, "Beta3"], ncol = 1, dimnames = list(NULL, "Beta")))
-
-# Combining  into an mcmc.list object
-mcmc_combined <- mcmc.list(mcmc_chain1, mcmc_chain2, mcmc_chain3)
-
-# MCMCtrace 
-MCMCtrace(mcmc_combined, params = "Beta", pdf = FALSE)
-
-# Ploting posterior density using coda's densityplot function
-densityplot(mcmc_combined, main = "Posterior Density of Beta")
+# Trace plot for all chains
+ggplot(mcmc_data_long, aes(x = Iteration, y = Value, color = Parameter)) +
+  geom_line() +
+  labs(title = "Trace Plots for MCMC Chains", 
+       x = "Iteration", y = "Value") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
 
 
-# posterior  visualization using MCMCvis
-MCMCplot(mcmc_combined, params = "Beta", main = "Posterior Distribution of Beta")
+# Density plots for each parameter
+ggplot(mcmc_data_long, aes(x = Value, fill = Parameter)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Posterior Density of Beta Parameters", 
+       x = "Value", y = "Density") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+
+# Density plots for each parameter
+ggplot(mcmc_data_long, aes(x = Value, fill = Parameter)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Posterior Density of Beta Parameters", 
+       x = "Value", y = "Density") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+# Posterior distribution plot
+ggplot(mcmc_data_long, aes(x = Parameter, y = Value, fill = Parameter)) +
+  geom_boxplot() +
+  labs(title = "Posterior Distribution of Beta Parameters", 
+       x = "Parameter", y = "Value") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+
 
 ```
 
@@ -470,6 +537,7 @@ This MCMC chains have likely converged to the same target distribution, and ther
 # MCMCvis to summarize the chains including R-hat and effective sample size
 ```{r}
 
+
 MCMCsummary(mcmc_combined, Rhat = TRUE, n.eff = TRUE)
 ```
 
@@ -481,17 +549,22 @@ rstan::summary(mcmc_combined)
 
 # MCMC Trace for Beta && # Histogram of posterior distribution
 ```{r}
-# MCMC Trace for Beta
-mcmc_df <- data.frame(Iteration = burnin:n_iter, Beta = c(beta_chains[burnin:n_iter, ]))
-ggplot(mcmc_df, aes(x = Iteration, y = Beta)) +
-  geom_line(color = "blue", linewidth = 1) +
-  labs(title = "MCMC Trace for Beta (Adaptive MCMC)", x = "Iteration", y = "Beta") +
-  theme_minimal()
+# Trace plot for beta chains
+ggplot(mcmc_data_long, aes(x = Iteration, y = Value, color = Parameter)) +
+  geom_line(linewidth = 1) +
+  labs(title = "MCMC Trace for Beta Parameters (Adaptive MCMC)", 
+       x = "Iteration", y = "Value") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
 
 # Histogram of posterior distribution
-ggplot(data.frame(Beta = c(beta_chains[burnin:n_iter, ])), aes(x = Beta)) +
-  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
-  labs(title = "Posterior Distribution of Beta", x = "Beta", y = "Frequency") +
-  theme_minimal()
+
+ggplot(mcmc_data_long, aes(x =Iteration, fill = Parameter)) +
+  geom_histogram(bins = 50, color = "black", alpha = 0.7) +
+  labs(title = "Posterior Distribution of Beta Parameters", 
+       x = "Iteration", y = "Value") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
 
 ```
