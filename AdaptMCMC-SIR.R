@@ -114,7 +114,7 @@ initial_state <- c(S1 = 99, I1 = 1, R1 = 0,  # Children
                    S3 = 99, I3 = 1, R3 = 0)  # Elderly
 
 # Time sequence (one year with daily time steps)
-times <- seq(0, 365, by = 1)
+times <- seq(0, 1095, by = 1)
 
 ```
 
@@ -141,8 +141,8 @@ ggplot(simulated_data_long, aes(x = Time, y = Count, color = Compartment)) +
   scale_color_manual(values = c("blue", "green", "red",      # Children
                                 "blue4", "green4", "red4",  # Adults
                                 "blue2", "green2", "red2",  # Elderly
-                                "purple")) +  # Additional color to make it 10
-  coord_cartesian(ylim = c(0, 100)) +  # Set y-axis limits from 0 to 100
+                                "purple")) + 
+  coord_cartesian(ylim = c(0, 100)) +  
   theme_minimal()
 
 
@@ -162,7 +162,7 @@ In Bayesian statistics, likelihood combines with the prior distribution to updat
 ```{r}
 log_likelihood_age <- function(params, observed_data, initial_state, times) {
   parameters <- c(params["beta1"], params["beta2"], params["beta3"], params["death_rate"], 
-                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"], gamma = 1/10) 
+                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"],params["aging_rate1to2"],params["aging_rate2to3"], gamma = 1/10) 
   
   out <- ode(y = initial_state, times = times, func = SIR_model_age, parms = parameters)
   
@@ -188,10 +188,6 @@ log_likelihood_age <- function(params, observed_data, initial_state, times) {
   return(log_likelihood)
 }
 
-
-
-
-
 ```
 
 
@@ -202,12 +198,22 @@ Monte Carlo - Estimates distribution of interest.
 ($\text{P}(X_{t}+ _1| \text{X}_{t1}, X_{t2}....X_{t}_{t} = \text{P}(X_{t}+_1|X_{t}$)
 ```{r}
 n_iter <- 5000
-beta_init <- c(0.1, 0.15, 0.2)  # Initial beta values for MCMC
+beta_init <- c(0.4, 0.3, 0.25)  # Initial beta values for MCMC
 n_chains <- 3 # Number of chains
-sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
+sd_prop <- rep(0.01, n_chains)  # Initial SD for each chain
 target_accept_rate <- 0.234  # Target acceptance rate for adaptive MCMC
 adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
-
+initial_params_list <- replicate(n_chains, c(
+  beta1 = beta_init[1],             # Transmission rate for children
+  beta2 = beta_init[2],             # Transmission rate for adults
+  beta3 = beta_init[3],             # Transmission rate for elderly
+  death_rate = 0.01,                 # Death rate
+  birth_rate = 0.01,                 # Birth rate
+  vax_efficacy = 0.8,                # Vaccine efficacy
+  vax_coverage = 0.6,                # Vaccination coverage
+  aging_rate1to2 = 0.02,             # Aging rate from children to adults
+  aging_rate2to3 = 0.015             # Aging rate from adults to elderly
+), simplify = FALSE)
 
 ```
 
@@ -231,11 +237,13 @@ prior <- function(beta) {
 }
 ```
 
+
+
 # MCMC loop for each chain
 ```{r}
 
 for (chain in 1:n_chains) {
-  
+
   acceptance_counter <- 0  # Resetting acceptance counter for each chain
   loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1, chain], 
                                                beta2 = beta_chains[1, chain], 
@@ -250,16 +258,19 @@ for (chain in 1:n_chains) {
   
   if (is.nan(loglik_curr)) {
     loglik_curr <- -Inf
-    print(paste("Warning: Initial log likelihood is NaN for chain", chain))
+    print(paste("Warning: Initial log likelihood is NaN for chain", chain, "with beta =", beta_chains[1, chain]))
   }
   
   for (i in 2:n_iter) {
     beta_proposed <- rnorm(1, mean = beta_chains[i - 1, chain], sd = sd_prop[chain])
+
     
-    # Check for NA or invalid proposed beta
-    if (is.na(beta_proposed) || beta_proposed <= 0) {
+    print(paste("Iteration", i, "Chain", chain, "Proposed beta =", beta_proposed, "sd =", sd_prop[chain]))
+    
+    # Checking for NA or invalid proposed beta
+    if (is.na(beta_proposed) || beta_proposed <= 0 || is.nan(beta_proposed)) {
       loglik_prop <- -Inf  # Penalize invalid proposals
-      print(paste("Warning: Proposed beta is NA or non-positive at iteration", i, "in chain", chain))
+      print(paste("Warning: Proposed beta is NA, NaN, or non-positive at iteration", i, "in chain", chain, "with beta =", beta_proposed))
     } else {
       loglik_prop <- log_likelihood_age(params = c(beta1 = beta_proposed, 
                                                    beta2 = beta_proposed, 
@@ -274,7 +285,7 @@ for (chain in 1:n_chains) {
       
       if (is.nan(loglik_prop)) {
         loglik_prop <- -Inf
-        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i, "in chain", chain))
+        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i, "in chain", chain, "with beta =", beta_proposed))
       }
     }
     
@@ -308,8 +319,9 @@ for (chain in 1:n_chains) {
       sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
       
       # Ensuring sd_prop doesn't become negative or too small
-      if (sd_prop[chain] < 1e-6) {
+      if (sd_prop[chain] < 1e-6 || is.nan(sd_prop[chain])) {
         sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
+        print(paste("Warning: sd_prop became too small or NaN and was reset to minimum value at iteration", i, "in chain", chain))
       }
     }
   }
