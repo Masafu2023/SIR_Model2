@@ -313,6 +313,7 @@ for (i in 2:n_iter) {
         if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
           beta_chains[i,] <- beta_proposed
           loglik_curr <- loglik_prop
+          p_curr <- beta_proposed
           acceptance_counter <- acceptance_counter + 1
         } else {
           beta_chains[i,] <- beta_chains[i - 1,]
