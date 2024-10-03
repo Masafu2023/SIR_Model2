@@ -274,7 +274,7 @@ for (i in 2:n_iter) {
     # Check for NA or invalid proposed beta
     if (any(beta_proposed < 0.0)) {
       loglik_prop <- -Inf  # Penalize invalid proposals
-      print(paste("Warning: Proposed beta is NA or non-positive at iteration", i, "in chain", chain))
+      print(paste("Warning: Proposed beta is NA or non-positive at iteration", i))
     } else {
       loglik_prop <- log_likelihood_age(params = c(beta_proposed["beta1"], 
                                                    beta_proposed["beta2"], 
