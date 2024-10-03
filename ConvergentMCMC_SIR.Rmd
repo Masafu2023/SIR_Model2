@@ -211,7 +211,7 @@ beta_init <- c(0.1, 0.15, 0.2, 0.2)  # Initial beta and va efficay values for MC
 n_chains <- 3 # Number of chains
 #sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
 target_accept_rate <- 0.234  # Target acceptance rate for adaptive MCMC
-adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
+#adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
 
 
 ```
@@ -229,11 +229,12 @@ beta_chains[1, ] <- beta_init
 
 # Prior distribution: Beta(2, 2)
 prior <- function(pr) {
-    return(dbeta(pr[1], 2, 2, log = TRUE) +
+   rt <- dbeta(pr[1], 2, 2, log = TRUE) +
            dbeta(pr[2], 2, 2, log = TRUE) +
            dbeta(pr[3], 2, 2, log = TRUE) +
            dunif(pr[4], 0, 1, log = TRUE)
-           )  # Return log density
+   rt <- as.numeric(rt) # remove the names
+   return(rt)  # Return log density
 }
 ```
 
@@ -257,7 +258,7 @@ loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1,1],
   
   p_curr = beta_chains[1,]
   names(p_curr) <- c("beta1","beta2","beta3","vax_efficacy")
-  covariance_curr <- diag(p_curr/1000)
+  covariance_curr <- diag(p_curr/10000)
   rownames(covariance_curr) = names(p_curr)
   colnames(covariance_curr) = names(p_curr)
   covariance = covariance_curr
@@ -323,7 +324,7 @@ for (i in 2:n_iter) {
     if(i>100){
       covariance=cov(beta_chains[1:i,])
       rownames(covariance)=names(p_curr); colnames(covariance)=names(p_curr)
-      scaling = exp(log(scaling) + (0.999)^(i)*(acceptance_counter/(i)-0.234))
+      scaling = exp(log(scaling) + (0.9999)^(i)*(acceptance_counter/(i)-0.234))
       scaling = min(scaling, scaling_max)
     }
     
