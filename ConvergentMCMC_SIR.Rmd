@@ -16,6 +16,7 @@ library(tidyverse)
 library(coda)
 library(MCMCvis)
 library(lattice)
+library(MASS)
 
 ```
 
@@ -43,6 +44,8 @@ SIR_model_age <- function(time, state, parameters) {
   N2 <- S2 + I2 + R2
   N3 <- S3 + I3 + R3
   
+  N = N1 + N2 + N3
+  
   # Transmission rates (force of infection) for each age group & recovery rate
   beta1 <- parameters["beta1"]
   beta2 <- parameters["beta2"]
@@ -62,9 +65,9 @@ SIR_model_age <- function(time, state, parameters) {
   aging_rate2to3 <- parameters["aging_rate2to3"]
   
   # Equations for age group 1 (Children)
-  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N1 - death_rate * S1 - aging_rate1to2 * S1
+  dS1 <- -beta1 * S1 * I1 / N1 + birth_rate * (1 - vax_coverage) * N + birth_rate * vax_coverage *(1 - vax_efficacy) * N - death_rate * S1 - aging_rate1to2 * S1
   dI1 <- beta1 * S1 * I1 / N1 - gamma * I1 - death_rate * I1 - aging_rate1to2 * I1
-  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N1 - death_rate * R1 - aging_rate1to2 * R1
+  dR1 <- gamma * I1 + birth_rate * vax_coverage * vax_efficacy * N - death_rate * R1 - aging_rate1to2 * R1
   
   # Equations for age group 2 (Adults)
   dS2 <- -beta2 * S2 * I2 / N2 + aging_rate1to2 * S1 - death_rate * S2 - aging_rate2to3 * S2
@@ -94,8 +97,8 @@ birth_rate <- 0.01  # Birth rate for youngest group
 death_rate <- 0.01  # Death rate 
 vax_coverage <- 0.6  # 60% vaccination coverage at birth
 vax_efficacy <- 0.8  # 80% vaccine efficacy (all-or-nothing)
-aging_rate1to2 <- 0.02  # Aging rate from children to adults
-aging_rate2to3 <- 0.015 # Aging rate from adults to elderly
+aging_rate1to2 <- 1/(18*365)  # Aging rate from children to adults
+aging_rate2to3 <- 1/(42*365) # Aging rate from adults to elderly
 
 # Parameters vector
 parameters <- c(beta1 = beta1, beta2 = beta2, beta3 = beta3, gamma = gamma, 
@@ -162,7 +165,9 @@ In Bayesian statistics, likelihood combines with the prior distribution to updat
 ```{r}
 log_likelihood_age <- function(params, observed_data, initial_state, times) {
   parameters <- c(params["beta1"], params["beta2"], params["beta3"], params["death_rate"], 
-                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"], gamma = 1/10) 
+                  params["birth_rate"], params["vax_efficacy"], params["vax_coverage"],params["gamma"],
+                                               params["aging_rate1to2"],
+                                               params["aging_rate2to3"] ) 
   
   out <- ode(y = initial_state, times = times, func = SIR_model_age, parms = parameters)
   
@@ -178,9 +183,9 @@ log_likelihood_age <- function(params, observed_data, initial_state, times) {
     obs <- ceiling(observed_data[[col]])
     model <- model_data[[col]]
     
-    if (any(is.na(obs)) || any(is.na(model))) {
-      return(-Inf)
-    }
+    # if (any(is.na(obs)) || any(is.na(model))) {
+    #   return(-Inf)
+    # }
     
     log_likelihood <- log_likelihood + sum(dpois(obs, lambda = model, log = TRUE))
   }
@@ -201,10 +206,10 @@ Markov chain - is a sequence of random variables where each variable(or state) d
 Monte Carlo - Estimates distribution of interest.
 ($\text{P}(X_{t}+ _1| \text{X}_{t1}, X_{t2}....X_{t}_{t} = \text{P}(X_{t}+_1|X_{t}$)
 ```{r}
-n_iter <- 5000
-beta_init <- c(0.1, 0.15, 0.2)  # Initial beta values for MCMC
+n_iter <- 1000
+beta_init <- c(0.1, 0.15, 0.2, 0.2)  # Initial beta and va efficay values for MCMC
 n_chains <- 3 # Number of chains
-sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
+#sd_prop <- rep(0.001, n_chains)  # Initial SD for each chain
 target_accept_rate <- 0.234  # Target acceptance rate for adaptive MCMC
 adapt_rate <- 0.01  # Rate of adaptation for the proposal SD
 
@@ -217,71 +222,79 @@ Rhat(potential scale reduction factor) - Measures whether or not an MCMC algorit
 
 ```{r}
 # Incorporating RHAT logic: storage for multiple chains
-beta_chains <- matrix(NA, ncol = n_chains, nrow = n_iter)
+beta_chains <- matrix(NA, ncol = 4 , nrow = n_iter)
 
 # Initializing chains with different initial values
 beta_chains[1, ] <- beta_init
 
 # Prior distribution: Beta(2, 2)
-prior <- function(beta) {
-    if (beta <= 0 || beta >= 1) {
-        return(-Inf)  # Reject invalid beta
-    }
-    return(dbeta(beta, 2, 2, log = TRUE))  # Return log density
+prior <- function(pr) {
+    return(dbeta(pr[1], 2, 2, log = TRUE) +
+           dbeta(pr[2], 2, 2, log = TRUE) +
+           dbeta(pr[3], 2, 2, log = TRUE) +
+           dunif(pr[4], 0, 1, log = TRUE)
+           )  # Return log density
 }
 ```
 
 # MCMC loop for each chain
 ```{r}
 
-for (chain in 1:n_chains) {
-  
-  acceptance_counter <- 0  # Resetting acceptance counter for each chain
-  loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1, chain], 
-                                               beta2 = beta_chains[1, chain], 
-                                               beta3 = beta_chains[1, chain], 
-                                               birth_rate = beta_chains[1, chain], 
-                                               death_rate = beta_chains[1, chain], 
-                                               vax_coverage = beta_chains[1, chain], 
-                                               vax_efficacy = beta_chains[1, chain]),
+acceptance_counter <- 0  # Resetting acceptance counter for each chain
+loglik_curr <- log_likelihood_age(params = c(beta1 = beta_chains[1,1], 
+                                               beta2 = beta_chains[1,2], 
+                                               beta3 = beta_chains[1,3], 
+                                               birth_rate = birth_rate, 
+                                               death_rate = death_rate, 
+                                               vax_coverage = vax_coverage, 
+                                               vax_efficacy = beta_chains[1, 4],
+                                               gamma=gamma,
+                                               aging_rate1to2=aging_rate1to2,
+                                               aging_rate2to3=aging_rate2to3),
                                     observed_data = simulated_data,
                                     initial_state = initial_state,
-                                    times = times) + prior(beta_chains[1, chain])
+                                    times = times) + prior(beta_chains[1,])
   
-  if (is.nan(loglik_curr)) {
-    loglik_curr <- -Inf
-    print(paste("Warning: Initial log likelihood is NaN for chain", chain))
-  }
+  p_curr = beta_chains[1,]
+  names(p_curr) <- c("beta1","beta2","beta3","vax_efficacy")
+  covariance_curr <- diag(p_curr/1000)
+  rownames(covariance_curr) = names(p_curr)
+  colnames(covariance_curr) = names(p_curr)
+  covariance = covariance_curr
   
-  for (i in 2:n_iter) {
-    beta_proposed <- rnorm(1, mean = beta_chains[i - 1, chain], sd = sd_prop[chain])
+for (i in 2:n_iter) {  
+
+    beta_proposed <- mvrnorm(1, mu = p_curr, Sigma = covariance)
     
     # Check for NA or invalid proposed beta
-    if (is.na(beta_proposed) || beta_proposed <= 0) {
+    if (any(beta_proposed < 0.0)) {
       loglik_prop <- -Inf  # Penalize invalid proposals
       print(paste("Warning: Proposed beta is NA or non-positive at iteration", i, "in chain", chain))
     } else {
-      loglik_prop <- log_likelihood_age(params = c(beta1 = beta_proposed, 
-                                                   beta2 = beta_proposed, 
-                                                   beta3 = beta_proposed,
-                                                   birth_rate = beta_proposed, 
-                                                   death_rate = beta_proposed, 
-                                                   vax_coverage = beta_proposed, 
-                                                   vax_efficacy = beta_proposed),
+      loglik_prop <- log_likelihood_age(params = c(beta_proposed["beta1"], 
+                                                   beta_proposed["beta2"], 
+                                                   beta_proposed["beta3"],
+                                                   birth_rate = birth_rate, 
+                                                   death_rate = death_rate, 
+                                                   vax_coverage = vax_coverage, 
+                                                   beta_proposed["vax_efficacy"],
+                                                   gamma=gamma,
+                                                   aging_rate1to2=aging_rate1to2,
+                                                   aging_rate2to3=aging_rate2to3),
                                         observed_data = simulated_data,
                                         initial_state = initial_state,
                                         times = times) + prior(beta_proposed)
       
       if (is.nan(loglik_prop)) {
         loglik_prop <- -Inf
-        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i, "in chain", chain))
+        print(paste("Setting loglik_prop to -Inf due to NaN at iteration", i))
       }
     }
     
     #  loglik_curr 
     if (is.nan(loglik_curr)) {
       loglik_curr <- -Inf
-      print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i, "in chain", chain))
+      print(paste("Setting loglik_curr to -Inf due to NaN at iteration", i))
     }
     
     # Computing acceptance probability only if valid log likelihood values
@@ -293,28 +306,26 @@ for (chain in 1:n_chains) {
       } else {
         # Metropolis-Hastings acceptance step
         if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
-          beta_chains[i, chain] <- beta_proposed
+          beta_chains[i,] <- beta_proposed
           loglik_curr <- loglik_prop
           acceptance_counter <- acceptance_counter + 1
         } else {
-          beta_chains[i, chain] <- beta_chains[i - 1, chain]
+          beta_chains[i,] <- beta_chains[i - 1,]
         }
       }
     }
     
-    # Adaptive adjustment of proposal standard deviation (sd_prop)
-    if (i > 100) {  # Adapt every 100 iterations
-      acceptance_rate <- acceptance_counter / i
-      sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
-      
-      # Ensuring sd_prop doesn't become negative or too small
-      if (sd_prop[chain] < 1e-6) {
-        sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
-      }
-    }
+    # # Adaptive adjustment of proposal standard deviation (sd_prop)
+    # if (i > 100) {  # Adapt every 100 iterations
+    #   acceptance_rate <- acceptance_counter / i
+    #   sd_prop[chain] <- sd_prop[chain] * exp(adapt_rate * (acceptance_rate - target_accept_rate))
+    #   
+    #   # Ensuring sd_prop doesn't become negative or too small
+    #   if (sd_prop[chain] < 1e-6) {
+    #     sd_prop[chain] <- 1e-6  # Minimum bound to avoid degenerate proposals
+    #   }
+    # }
   }
-}
-
 
 ```
 
