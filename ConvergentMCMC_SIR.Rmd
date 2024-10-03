@@ -307,7 +307,7 @@ for (i in 2:n_iter) {
       acceptance_prob <- loglik_prop - loglik_curr
       
       if (is.nan(acceptance_prob)) {
-        print(paste("Warning: acceptance_prob is NaN at iteration", i, "in chain", chain))
+        print(paste("Warning: acceptance_prob is NaN at iteration", i))
       } else {
         # Metropolis-Hastings acceptance step
         if (log(runif(1, min = 1e-10, max = 1)) < acceptance_prob) {
